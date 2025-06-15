@@ -15,7 +15,15 @@
     "clsx": "^2.1.1",
     "tailwind-merge": "^2.5.4",
     "lucide-react": "^0.468.0",
-    "class-variance-authority": "^0.7.1"
+    "class-variance-authority": "^0.7.1",
+    "@solana/web3.js": "^1.87.6",
+    "@solana/wallet-adapter-base": "^0.9.23",
+    "@solana/wallet-adapter-react": "^0.15.35",
+    "@solana/wallet-adapter-react-ui": "^0.9.35",
+    "@solana/wallet-adapter-wallets": "^0.19.32",
+    "@coral-xyz/anchor": "^0.29.0",
+    "react-router-dom": "^6.20.1",
+    "react-hot-toast": "^2.4.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
