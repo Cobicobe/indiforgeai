@@ -1,0 +1,262 @@
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::system_program;
+
+declare_id!("2vwoUkiNArxn2YJZihzSLApxHcmFDA2933Fdy2kFzxbV");
+
+#[program]
+pub mod dataset_marketplace {
+    use super::*;
+
+    pub fn create_listing(
+        ctx: Context<CreateListing>,
+        price: u64,
+        creator_royalty: u8,
+        title: String,
+        metadata_uri: String,
+    ) -> Result<()> {
+        let dataset_listing = &mut ctx.accounts.dataset_listing;
+        dataset_listing.creator = ctx.accounts.creator.key();
+        dataset_listing.price = price;
+        dataset_listing.creator_royalty = creator_royalty;
+        dataset_listing.title = title;
+        dataset_listing.metadata_uri = metadata_uri;
+        dataset_listing.is_active = true;
+        dataset_listing.total_purchases = 0;
+        dataset_listing.bump = *ctx.bumps.get("dataset_listing").unwrap();
+        
+        Ok(())
+    }
+
+    pub fn purchase_dataset(
+        ctx: Context<PurchaseDataset>,
+        dataset_id: Pubkey,
+        referrer: Option<Pubkey>,
+    ) -> Result<()> {
+        let dataset_listing = &mut ctx.accounts.dataset_listing;
+        let buyer = &ctx.accounts.buyer;
+        let creator = &ctx.accounts.creator;
+        let platform = &ctx.accounts.platform;
+        
+        require!(dataset_listing.is_active, ErrorCode::DatasetNotActive);
+        
+        let total_price = dataset_listing.price;
+        let creator_amount = (total_price * dataset_listing.creator_royalty as u64) / 100;
+        let platform_fee = 30; // 30% platform fee
+        let mut platform_amount = (total_price * platform_fee) / 100;
+        let mut referral_amount = 0u64;
+        
+        // If referrer exists, give them 2% from platform share
+        if referrer.is_some() {
+            referral_amount = (total_price * 2) / 100;
+            platform_amount = platform_amount.saturating_sub(referral_amount);
+        }
+        
+        // Transfer to creator
+        if creator_amount > 0 {
+            let transfer_to_creator = anchor_lang::solana_program::system_instruction::transfer(
+                &buyer.key(),
+                &creator.key(),
+                creator_amount,
+            );
+            anchor_lang::solana_program::program::invoke(
+                &transfer_to_creator,
+                &[
+                    buyer.to_account_info(),
+                    creator.to_account_info(),
+                ],
+            )?;
+        }
+        
+        // Transfer to platform
+        if platform_amount > 0 {
+            let transfer_to_platform = anchor_lang::solana_program::system_instruction::transfer(
+                &buyer.key(),
+                &platform.key(),
+                platform_amount,
+            );
+            anchor_lang::solana_program::program::invoke(
+                &transfer_to_platform,
+                &[
+                    buyer.to_account_info(),
+                    platform.to_account_info(),
+                ],
+            )?;
+        }
+        
+        // Transfer to referrer if exists
+        if let Some(referrer_key) = referrer {
+            if referral_amount > 0 {
+                let referrer_account = &ctx.accounts.referrer.as_ref().unwrap();
+                let transfer_to_referrer = anchor_lang::solana_program::system_instruction::transfer(
+                    &buyer.key(),
+                    &referrer_key,
+                    referral_amount,
+                );
+                anchor_lang::solana_program::program::invoke(
+                    &transfer_to_referrer,
+                    &[
+                        buyer.to_account_info(),
+                        referrer_account.to_account_info(),
+                    ],
+                )?;
+            }
+        }
+        
+        // Update dataset stats
+        dataset_listing.total_purchases += 1;
+        
+        // Create purchase record
+        let purchase_record = &mut ctx.accounts.purchase_record;
+        purchase_record.buyer = buyer.key();
+        purchase_record.dataset = dataset_listing.key();
+        purchase_record.price_paid = total_price;
+        purchase_record.creator_amount = creator_amount;
+        purchase_record.platform_amount = platform_amount;
+        purchase_record.referral_amount = referral_amount;
+        purchase_record.timestamp = Clock::get()?.unix_timestamp;
+        purchase_record.bump = *ctx.bumps.get("purchase_record").unwrap();
+        
+        Ok(())
+    }
+
+    pub fn update_listing(
+        ctx: Context<UpdateListing>,
+        new_price: Option<u64>,
+        is_active: Option<bool>,
+    ) -> Result<()> {
+        let dataset_listing = &mut ctx.accounts.dataset_listing;
+        
+        if let Some(price) = new_price {
+            dataset_listing.price = price;
+        }
+        
+        if let Some(active) = is_active {
+            dataset_listing.is_active = active;
+        }
+        
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+#[instruction(price: u64, creator_royalty: u8, title: String, metadata_uri: String)]
+pub struct CreateListing<'info> {
+    #[account(mut)]
+    pub creator: Signer<'info>,
+    
+    #[account(
+        init,
+        payer = creator,
+        space = DatasetListing::LEN,
+        seeds = [b"dataset", creator.key().as_ref(), title.as_bytes()],
+        bump
+    )]
+    pub dataset_listing: Account<'info, DatasetListing>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(dataset_id: Pubkey, referrer: Option<Pubkey>)]
+pub struct PurchaseDataset<'info> {
+    #[account(mut)]
+    pub buyer: Signer<'info>,
+    
+    #[account(mut)]
+    pub creator: SystemAccount<'info>,
+    
+    #[account(mut)]
+    pub platform: SystemAccount<'info>,
+    
+    pub referrer: Option<SystemAccount<'info>>,
+    
+    #[account(
+        mut,
+        seeds = [b"dataset", creator.key().as_ref()],
+        bump = dataset_listing.bump
+    )]
+    pub dataset_listing: Account<'info, DatasetListing>,
+    
+    #[account(
+        init,
+        payer = buyer,
+        space = PurchaseRecord::LEN,
+        seeds = [b"purchase", buyer.key().as_ref(), dataset_listing.key().as_ref()],
+        bump
+    )]
+    pub purchase_record: Account<'info, PurchaseRecord>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateListing<'info> {
+    #[account(mut)]
+    pub creator: Signer<'info>,
+    
+    #[account(
+        mut,
+        seeds = [b"dataset", creator.key().as_ref()],
+        bump = dataset_listing.bump,
+        has_one = creator
+    )]
+    pub dataset_listing: Account<'info, DatasetListing>,
+}
+
+#[account]
+pub struct DatasetListing {
+    pub creator: Pubkey,
+    pub price: u64,
+    pub creator_royalty: u8,
+    pub title: String,
+    pub metadata_uri: String,
+    pub is_active: bool,
+    pub total_purchases: u64,
+    pub bump: u8,
+}
+
+impl DatasetListing {
+    pub const LEN: usize = 8 + // discriminator
+        32 + // creator
+        8 + // price
+        1 + // creator_royalty
+        4 + 100 + // title (max 100 chars)
+        4 + 200 + // metadata_uri (max 200 chars)
+        1 + // is_active
+        8 + // total_purchases
+        1; // bump
+}
+
+#[account]
+pub struct PurchaseRecord {
+    pub buyer: Pubkey,
+    pub dataset: Pubkey,
+    pub price_paid: u64,
+    pub creator_amount: u64,
+    pub platform_amount: u64,
+    pub referral_amount: u64,
+    pub timestamp: i64,
+    pub bump: u8,
+}
+
+impl PurchaseRecord {
+    pub const LEN: usize = 8 + // discriminator
+        32 + // buyer
+        32 + // dataset
+        8 + // price_paid
+        8 + // creator_amount
+        8 + // platform_amount
+        8 + // referral_amount
+        8 + // timestamp
+        1; // bump
+}
+
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Dataset is not active")]
+    DatasetNotActive,
+    #[msg("Insufficient funds")]
+    InsufficientFunds,
+    #[msg("Invalid royalty percentage")]
+    InvalidRoyalty,
+}

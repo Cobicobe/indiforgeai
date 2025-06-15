@@ -1,0 +1,20 @@
+[features]
+seeds = false
+skip-lint = false
+
+[programs.devnet]
+dataset_marketplace = "2vwoUkiNArxn2YJZihzSLApxHcmFDA2933Fdy2kFzxbV"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "Devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+
+[[test.genesis]]
+address = "2vwoUkiNArxn2YJZihzSLApxHcmFDA2933Fdy2kFzxbV"
+program = "programs/dataset-marketplace/target/deploy/dataset_marketplace.so"
